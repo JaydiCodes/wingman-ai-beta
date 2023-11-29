@@ -1,4 +1,9 @@
+import asyncio
 import json
+import time
+import xml.etree.ElementTree as ET
+import json
+from datetime import datetime, timezone
 from exceptions import MissingApiKeyException
 from services.open_ai import OpenAi
 from services.edge import EdgeTTS
@@ -256,6 +261,22 @@ class OpenAiWingman(Wingman):
                 instant_reponse = self._select_command_response(command)
                 await self._play_to_user(instant_reponse)
 
+        if function_name == "access_databanks":
+            function_response = self._access_databanks(
+                function_args["query_string"],
+                function_args["category"],
+                function_args["attribute"],
+            )
+
+        if function_name == "get_current_time":
+            function_response = self._get_current_time()
+
+        if function_name == "wait_for_then":
+            function_response = self._wait_for_then(
+                function_args["wait_time"],
+                function_args["action"],
+            )
+
         return function_response, instant_reponse
 
     async def _play_to_user(self, text: str):
@@ -280,8 +301,8 @@ class OpenAiWingman(Wingman):
             await self.edge_tts.generate_speech(
                 text, filename="audio_output/edge_tts.mp3", voice=tts_voice
             )
-            
-            if(self.config.get("features", {}).get("enable_robot_sound_effect")):
+
+            if self.config.get("features", {}).get("enable_robot_sound_effect"):
                 self.audio_player.effect_audio("audio_output/edge_tts.mp3")
 
             self.audio_player.play("audio_output/edge_tts.mp3")
@@ -292,7 +313,7 @@ class OpenAiWingman(Wingman):
                     response.content,
                     self.config.get("features", {}).get("play_beep_on_receiving"),
                     self.config.get("features", {}).get("enable_radio_sound_effect"),
-                    self.config.get("features", {}).get("enable_robot_sound_effect")
+                    self.config.get("features", {}).get("enable_robot_sound_effect"),
                 )
 
     def _execute_command(self, command: dict) -> str:
@@ -330,6 +351,64 @@ class OpenAiWingman(Wingman):
                             },
                         },
                         "required": ["command_name"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "access_databanks",
+                    "description": "Searches a file for content relating to a search query when the information relating to the search query is not immediately available",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query_string": {
+                                "type": "string",
+                                "description": "The subject of the query that was asked",
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "The category the subject falls under",
+                            },
+                            "attribute": {
+                                "type": "string",
+                                "description": "The attribute relating to the subject",
+                            },
+                        },
+                        "required": ["query_string","attribute"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_time",
+                    "description": "Gets the current time if so needed",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "wait_for_then",
+                    "description": "Waits for specified amount of time and then does something",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wait_time": {
+                                "type":"integer",
+                                "description": "The amount of time to wait"
+                            },
+                            "action": {
+                                "type":"string",
+                                "description": "The order to do i.e 'Do this action'"
+                            },
+                        },
+                        "required": ["wait_time", "action"]
                     },
                 },
             },
@@ -373,3 +452,33 @@ class OpenAiWingman(Wingman):
             f"   ChatGPT says this language maps to locale '{answer}'.", False
         )
         return answer
+
+    def _access_databanks(self, search_term: str, category: str, attribute: str):
+        tree = ET.parse("E:/unp4k-suite-v3.13.21/Data/Game.xml")
+        root = tree.getroot()
+
+        # Search for information
+        objects = []
+
+        for element in root.findall(search_term):
+            objects.append(element)
+
+        # Convert list to JSON
+        json_data = json.dumps({"elements": objects}, indent=4)
+        return json_data
+
+    def _get_current_time(self):
+        # Get the current UTC time
+        current_utc_time = datetime.now(timezone.utc)
+        current_time = current_utc_time.strftime("%H:%M:%S UTC")
+        return f'current time: {current_time}'
+
+    def _wait_for_then(self, wait_time: int, action: str):
+        asyncio.create_task(self._wait_then_do_task(wait_time, action))
+        return f"Waiting for: {wait_time} seconds"
+
+    async def _wait_then_do_task(self, wait_time: int, action: str):
+        time.sleep(float(wait_time))
+        response, insant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
+        Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
+        await self._play_to_user(response)
