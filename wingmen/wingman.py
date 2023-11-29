@@ -109,6 +109,11 @@ class Wingman:
         """
         return []
 
+    def reset_conversation_history(self):
+        """This function is called when the user triggers the ResetConversationHistory command.
+        It's a global command that should be implemented by every Wingman that keeps a message history.
+        """
+
     # ──────────────────────────── The main processing loop ──────────────────────────── #
 
     async def process(self, audio_input_wav: str):
@@ -162,7 +167,7 @@ class Wingman:
             Printr.info_print("Playing response back to user...")
 
         # the last step in the chain. You'll probably want to play the response to the user as audio using a TTS provider or mechanism of your choice.
-        await self._play_to_user(process_result)
+        await self._play_to_user(str(process_result))
 
         if self.debug:
             self.print_execution_time()
@@ -294,10 +299,14 @@ class Wingman:
             Printr.warn_print(
                 "Skipping actual keypress execution in debug_mode...", False
             )
-            return "Ok"
 
-        self.execute_keypress(command)
+        if len(command.get("keys", [])) > 0 and not self.debug:
+            self.execute_keypress(command)
         # TODO: we could do mouse_events here, too...
+
+        # handle the global special commands:
+        if command.get("name", None) == "ResetConversationHistory":
+            self.reset_conversation_history()
 
         if not self.debug:
             # in debug mode we already printed the separate execution times
@@ -316,7 +325,7 @@ class Wingman:
             command (dict): The command object from the config to execute
         """
 
-        for entry in command.get("keys"):
+        for entry in command.get("keys", []):
             if entry.get("modifier"):
                 key_module.keyDown(entry["modifier"])
 

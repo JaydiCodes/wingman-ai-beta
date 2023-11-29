@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 import json
 from datetime import datetime, timezone
 from exceptions import MissingApiKeyException
+from elevenlabs import generate, stream, Voice, VoiceSettings, voices
 from services.open_ai import OpenAi
 from services.edge import EdgeTTS
 from services.printr import Printr
@@ -31,11 +32,11 @@ class OpenAiWingman(Wingman):
         self.openai = OpenAi(api_key)
         """Our OpenAI API wrapper"""
 
-        self.messages = []
-        """The conversation history that is used for the GPT calls"""
-
         # every conversation starts with the "context" that the user has configured
-        self._add_message_to_history(self.config["openai"].get("context"), "system")
+        self.messages = [
+            {"role": "system", "content": self.config["openai"].get("context")}
+        ]
+        """The conversation history that is used for the GPT calls"""
 
         self.edge_tts = EdgeTTS()
         self.last_transcript_locale = None
@@ -88,13 +89,14 @@ class OpenAiWingman(Wingman):
             A tuple of strings representing the response to a function call and an instant response.
         """
         self.last_transcript_locale = locale
-        self._add_message_to_history(transcript, "user")
+        self._add_user_message(transcript)
 
         instant_response = self._try_instant_activation(transcript)
         if instant_response:
             return instant_response, instant_response
 
         completion = self._gpt_call()
+
         if completion is None:
             return None, None
 
@@ -113,10 +115,8 @@ class OpenAiWingman(Wingman):
 
         return response_message.content, response_message.content
 
-    def _add_message_to_history(
-        self, content: str, role: str, tool_call_id=None, name=None
-    ):
-        """Adds a message to the conversation history.
+    def _add_user_message(self, content: str):
+        """Shortens the conversation history if needed and adds a user message to it.
 
         Args:
             content (str): The message content to add.
@@ -124,14 +124,42 @@ class OpenAiWingman(Wingman):
             tool_call_id (Optional[str]): The identifier for the tool call, if applicable.
             name (Optional[str]): The name of the function associated with the tool call, if applicable.
         """
-        message_dict = {"role": role, "content": content}
+        msg = {"role": "user", "content": content}
+        self._cleanup_conversation_history()
+        self.messages.append(msg)
 
-        if tool_call_id is not None:
-            message_dict["tool_call_id"] = tool_call_id
-        if name is not None:
-            message_dict["name"] = name
+    def _cleanup_conversation_history(self):
+        """Cleans up the conversation history by removing messages that are too old."""
+        remember_messages = self.config["features"].get("remember_messages", None)
 
-        self.messages.append(message_dict)
+        if remember_messages is None:
+            return
+
+        # Calculate the max number of messages to keep including the initial system message
+        # `remember_messages * 2` pairs plus one system message.
+        max_messages = (remember_messages * 2) + 1
+
+        # every "AI interaction" is a pair of 2 messages: "user" and "assistant" or "tools"
+        deleted_pairs = 0
+
+        while len(self.messages) > max_messages:
+            if remember_messages == 0:
+                # Calculate pairs to be deleted, excluding the system message.
+                deleted_pairs += (len(self.messages) - 1) // 2
+                self.reset_conversation_history()
+            else:
+                while len(self.messages) > max_messages:
+                    del self.messages[1:3]
+                    deleted_pairs += 1
+
+        if self.debug and deleted_pairs > 0:
+            Printr.warn_print(
+                f"   Deleted {deleted_pairs} pairs of messages from the conversation history."
+            )
+
+    def reset_conversation_history(self):
+        """Resets the conversation history by removing all messages except for the initial system message."""
+        del self.messages[1:]
 
     def _try_instant_activation(self, transcript: str) -> str:
         """Tries to execute an instant activation command if present in the transcript.
@@ -154,6 +182,11 @@ class OpenAiWingman(Wingman):
         Returns:
             The GPT completion object or None if the call fails.
         """
+        if self.debug:
+            Printr.info_print(
+                f"   Calling GPT with {(len(self.messages) - 1) // 2} message pairs (excluding context)",
+                False,
+            )
         return self.openai.ask(
             messages=self.messages,
             tools=self._build_tools(),
@@ -194,10 +227,14 @@ class OpenAiWingman(Wingman):
                 function_name, function_args
             )
 
-            # Include the function's name when adding the message to history.
-            self._add_message_to_history(
-                function_response, "tool", tool_call.id, function_name
-            )
+            msg = {"role": "tool", "content": function_response}
+            if tool_call.id is not None:
+                msg["tool_call_id"] = tool_call.id
+            if function_name is not None:
+                msg["name"] = function_name
+
+            # Don't use self._add_user_message_to_history here because we never want to skip this because of history limitions
+            self.messages.append(msg)
 
         return instant_response
 
@@ -306,6 +343,27 @@ class OpenAiWingman(Wingman):
                 self.audio_player.effect_audio("audio_output/edge_tts.mp3")
 
             self.audio_player.play("audio_output/edge_tts.mp3")
+        elif self.tts_provider == "elevenlabs":
+            elevenlabs_config = self.config["elevenlabs"]
+            voice = elevenlabs_config.get("voice")
+            if not isinstance(voice, str):
+                voice = Voice(voice_id=voice.get("id"))
+            else:
+                voice = next((v for v in voices() if v.name == voice), None)
+
+            voice_setting = self._get_elevenlabs_settings(elevenlabs_config)
+            if voice_setting:
+                voice.settings = voice_setting
+
+            response = generate(
+                text,
+                voice=voice,
+                model=elevenlabs_config.get("model"),
+                stream=True,
+                api_key=elevenlabs_config.get("api_key"),
+                latency=elevenlabs_config.get("latency", 3),
+            )
+            stream(response)
         else:  # OpenAI TTS
             response = self.openai.speak(text, self.config["openai"].get("tts_voice"))
             if response is not None:
@@ -315,6 +373,25 @@ class OpenAiWingman(Wingman):
                     self.config.get("features", {}).get("enable_radio_sound_effect"),
                     self.config.get("features", {}).get("enable_robot_sound_effect"),
                 )
+
+    def _get_elevenlabs_settings(self, elevenlabs_config):
+        settings = elevenlabs_config.get("voice_settings")
+        if not settings:
+            return None
+
+        voice_settings = VoiceSettings(
+            stability=settings.get("stability", 0.5),
+            similarity_boost=settings.get("similarity_boost", 0.75),
+        )
+        style = settings.get("style", None)
+        use_speaker_boost = settings.get("use_speaker_boost", None)
+
+        if style is not None:
+            voice_settings.style = style
+        if use_speaker_boost is not None:
+            voice_settings.use_speaker_boost = use_speaker_boost
+
+        return voice_settings
 
     def _execute_command(self, command: dict) -> str:
         """Does what Wingman base does, but always returns "Ok" instead of a command response.
