@@ -1,5 +1,6 @@
 import io
 import os
+from typing import Iterator
 from pydub import AudioSegment
 from pydub.playback import play
 from scipy.io import wavfile
@@ -11,6 +12,15 @@ import numpy
 
 
 class AudioPlayer:
+    def pedalboard_chain(self):
+        return Pedalboard([
+            PitchShift(semitones=-3),
+            Delay(delay_seconds=0.01,feedback=0.5,mix=0.5),
+            Chorus(rate_hz=0.5, depth=0.8, mix=0.7, centre_delay_ms=2, feedback=0.3),
+            Reverb(room_size=0.05, dry_level=0.5, wet_level=0.2, freeze_mode=0.5, width=0.5),
+            Gain(gain_db=9)
+        ])
+
     def stream(self, stream: bytes):
         audio = self.get_audio_from_stream(stream)
         play(audio)
@@ -46,13 +56,7 @@ class AudioPlayer:
     def effect_audio(self, audio_file_path):
         # Load the audio file
         audio, sample_rate = sf.read(audio_file_path)        
-        board = Pedalboard([
-            PitchShift(semitones=-3),
-            Delay(delay_seconds=0.01,feedback=0.5,mix=0.5),
-            Chorus(rate_hz=0.5, depth=0.8, mix=0.7, centre_delay_ms=2, feedback=0.3),
-            Reverb(room_size=0.05, dry_level=0.5, wet_level=0.2, freeze_mode=0.5, width=0.5),
-            Gain(gain_db=9)
-        ])
+        board = self.pedalboard_chain()
         # Process the audio with the effects
         processed_audio = board(audio, sample_rate)
         # Save the processed audio to a new file

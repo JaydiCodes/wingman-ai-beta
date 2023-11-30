@@ -4,8 +4,8 @@ import time
 import xml.etree.ElementTree as ET
 import json
 from datetime import datetime, timezone
+from elevenlabs import generate, stream, save, Voice, VoiceSettings, voices
 from exceptions import MissingApiKeyException
-from elevenlabs import generate, stream, Voice, VoiceSettings, voices
 from services.open_ai import OpenAi
 from services.edge import EdgeTTS
 from services.printr import Printr
@@ -354,16 +354,25 @@ class OpenAiWingman(Wingman):
             voice_setting = self._get_elevenlabs_settings(elevenlabs_config)
             if voice_setting:
                 voice.settings = voice_setting
+            
+            robot_effect = self.config.get("features", {}).get("enable_robot_sound_effect")
 
             response = generate(
                 text,
                 voice=voice,
                 model=elevenlabs_config.get("model"),
-                stream=True,
+                stream=(not robot_effect),
                 api_key=elevenlabs_config.get("api_key"),
                 latency=elevenlabs_config.get("latency", 3),
             )
-            stream(response)
+            
+            if robot_effect:
+                save(response,"audio_output/elevenlabs.mp3")
+                self.audio_player.effect_audio("audio_output/elevenlabs.mp3")
+                self.audio_player.play("audio_output/elevenlabs.mp3")
+            else:
+                stream(response)
+            
         else:  # OpenAI TTS
             response = self.openai.speak(text, self.config["openai"].get("tts_voice"))
             if response is not None:
@@ -435,7 +444,7 @@ class OpenAiWingman(Wingman):
                 "type": "function",
                 "function": {
                     "name": "access_databanks",
-                    "description": "Searches a file for content relating to a search query when the information relating to the search query is not immediately available",
+                    "description": "Searches a file for content relating to a search query when the information relating to the search query is not immediately available to you",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -460,7 +469,7 @@ class OpenAiWingman(Wingman):
                 "type": "function",
                 "function": {
                     "name": "get_current_time",
-                    "description": "Gets the current time if so needed",
+                    "description": "An internal function that gets the current time if so needed",
                     "parameters": {
                         "type": "object",
                         "properties": {},
@@ -478,7 +487,7 @@ class OpenAiWingman(Wingman):
                         "properties": {
                             "wait_time": {
                                 "type":"integer",
-                                "description": "The amount of time to wait"
+                                "description": "The amount of time to wait in seconds. If minutes or hours are given, convert it."
                             },
                             "action": {
                                 "type":"string",
@@ -529,20 +538,37 @@ class OpenAiWingman(Wingman):
             f"   ChatGPT says this language maps to locale '{answer}'.", False
         )
         return answer
+    
+    def _update_databanks(self):
+        async def _update_game_data_file(self):
+            tree = ET.parse("E:/unp4k-suite-v3.13.21/Data/Game.xml")
+            root = tree.getroot()
+
+            # Search for information
+            objects = []
+
+            for element in root.findall(""):
+                objects.append(element)
+
+            # Convert list to JSON
+            json_data = json.dumps({"elements": objects}, indent=4)
+            return json_data
+        
+        asyncio.create_task(_update_game_data_file(self))
+        return "Updating databanks"
 
     def _access_databanks(self, search_term: str, category: str, attribute: str):
-        tree = ET.parse("E:/unp4k-suite-v3.13.21/Data/Game.xml")
-        root = tree.getroot()
-
-        # Search for information
-        objects = []
-
-        for element in root.findall(search_term):
-            objects.append(element)
-
-        # Convert list to JSON
-        json_data = json.dumps({"elements": objects}, indent=4)
-        return json_data
+        async def _access_game_data_file(self, search_term: str, category: str, attribute: str):
+            json_data = {}
+            # Should load the local json data
+            # Find the category
+            # Find search_term
+            # Find attribute if provided
+            # return json data
+            return json_data
+        
+        asyncio.create_task(_access_game_data_file(self, search_term, category, attribute))
+        return f"Accessing databanks to find data on {search_term}"
 
     def _get_current_time(self):
         # Get the current UTC time
@@ -551,11 +577,11 @@ class OpenAiWingman(Wingman):
         return f'current time: {current_time}'
 
     def _wait_for_then(self, wait_time: int, action: str):
-        asyncio.create_task(self._wait_then_do_task(wait_time, action))
-        return f"Waiting for: {wait_time} seconds"
+        async def _wait_then_do_task(self, wait_time: int, action: str):
+            time.sleep(float(wait_time))
+            response, insant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
+            Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
+            await self._play_to_user(response)
 
-    async def _wait_then_do_task(self, wait_time: int, action: str):
-        time.sleep(float(wait_time))
-        response, insant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
-        Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
-        await self._play_to_user(response)
+        asyncio.create_task(_wait_then_do_task(self, wait_time, action))
+        return f"Waiting for: {wait_time} seconds"
