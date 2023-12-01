@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 import xml.etree.ElementTree as ET
 import json
@@ -314,6 +315,12 @@ class OpenAiWingman(Wingman):
                 function_args["action"],
             )
 
+        if function_name == "start_command_loop":
+            function_response = self._start_command_loop(function_args["command_name"])
+
+        if function_name == "stop_command_loop":
+            function_response = self._stop_command_loop()
+
         return function_response, instant_reponse
 
     async def _play_to_user(self, text: str):
@@ -481,7 +488,7 @@ class OpenAiWingman(Wingman):
                 "type": "function",
                 "function": {
                     "name": "wait_for_then",
-                    "description": "Waits for specified amount of time and then does something",
+                    "description": "Waits for specified amount of time and then does something. This is also used when asked to set a reminder.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -495,6 +502,36 @@ class OpenAiWingman(Wingman):
                             },
                         },
                         "required": ["wait_time", "action"]
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "start_command_loop",
+                    "description": "A function that executes a given command in a loop",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command_name": {
+                                "type": "string",
+                                "description": "The command to execute",
+                                "enum": commands,
+                            },
+                        },
+                        "required": ["command_name"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "stop_command_loop",
+                    "description": "A function that gets stops the current command loop",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
                     },
                 },
             },
@@ -576,12 +613,49 @@ class OpenAiWingman(Wingman):
         current_time = current_utc_time.strftime("%H:%M:%S UTC")
         return f'current time: {current_time}'
 
+    wait_task = None
     def _wait_for_then(self, wait_time: int, action: str):
-        async def _wait_then_do_task(self, wait_time: int, action: str):
-            time.sleep(float(wait_time))
-            response, insant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
-            Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
-            await self._play_to_user(response)
+        if self.wait_task:
+            self.wait_task.cancel()
+        self.wait_task = asyncio.create_task(self._wait_then_do_task(wait_time, action))
+        return "Respond with a message that acknowledges the wait_time and action"
 
-        asyncio.create_task(_wait_then_do_task(self, wait_time, action))
-        return f"Waiting for: {wait_time} seconds"
+    async def _wait_then_do_task(self, wait_time: int, action: str):
+        try:           
+            async def task(wait_time,action):
+                time.sleep(wait_time)
+                response, instant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
+                Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
+                await self._play_to_user(response)
+            
+            wait_thread = threading.Thread(target=task, args=(wait_time,action))
+            wait_thread.start()
+        except Exception as e:
+            Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)        
+
+        return "Waiting"
+
+    loop_task = None
+    looping = True
+    def _start_command_loop(self, command_name):
+        command = self._get_command(command_name)
+        if self.loop_task:
+            self.loop_task.cancel()
+        self.looping = True
+        self.loop_task = asyncio.create_task(self._loop(command))
+        return "Starting command loop"
+
+    async def _loop(self, command):
+        try:
+            while self.looping:
+                time.sleep(2)
+                self._execute_command(command)
+        except Exception as e:
+            Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)
+
+    def _stop_command_loop(self):
+        if self.loop_task:
+            self.looping = False
+            self.loop_task.cancel()
+            return "Stopping command loop"
+        return "No command to stop"
