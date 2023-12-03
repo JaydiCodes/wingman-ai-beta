@@ -14,11 +14,11 @@ import numpy
 class AudioPlayer:
     def pedalboard_chain(self):
         return Pedalboard([
-            PitchShift(semitones=-3),
+            PitchShift(semitones=-2),
             Delay(delay_seconds=0.01,feedback=0.5,mix=0.5),
-            Chorus(rate_hz=0.5, depth=0.8, mix=0.7, centre_delay_ms=2, feedback=0.3),
+            Chorus(rate_hz=0.5, depth=0.8, mix=0.5, centre_delay_ms=2, feedback=0.3),
             Reverb(room_size=0.05, dry_level=0.5, wet_level=0.2, freeze_mode=0.5, width=0.5),
-            Gain(gain_db=9)
+            Gain(gain_db=3)
         ])
 
     def stream(self, stream: bytes):

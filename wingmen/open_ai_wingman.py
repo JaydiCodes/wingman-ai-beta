@@ -451,7 +451,7 @@ class OpenAiWingman(Wingman):
                 "type": "function",
                 "function": {
                     "name": "access_databanks",
-                    "description": "Searches a file for content relating to a search query when the information relating to the search query is not immediately available to you",
+                    "description": "A function used only when asked to access the databanks, to search for content related to a search query",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -461,17 +461,17 @@ class OpenAiWingman(Wingman):
                             },
                             "category": {
                                 "type": "string",
-                                "description": "The category the subject falls under",
+                                "description": "The category the subject falls under. i.e: ships, weapons, components",
                             },
-                            "attribute": {
+                            "attributes": {
                                 "type": "string",
-                                "description": "The attribute relating to the subject",
+                                "description": "The attributes relating to the subject; comma delimited",
                             },
                         },
                         "required": ["query_string","attribute"],
                     },
                 },
-            },
+            },            
             {
                 "type": "function",
                 "function": {
@@ -518,6 +518,10 @@ class OpenAiWingman(Wingman):
                                 "description": "The command to execute",
                                 "enum": commands,
                             },
+                            "interval": {
+                                "type": "number",
+                                "description": "The interval in between executions. If none is given, the default will be 2 seconds"
+                            }
                         },
                         "required": ["command_name"],
                     },
@@ -527,7 +531,7 @@ class OpenAiWingman(Wingman):
                 "type": "function",
                 "function": {
                     "name": "stop_command_loop",
-                    "description": "A function that gets stops the current command loop",
+                    "description": "A function that stops the current command loop",
                     "parameters": {
                         "type": "object",
                         "properties": {},
@@ -575,24 +579,6 @@ class OpenAiWingman(Wingman):
             f"   ChatGPT says this language maps to locale '{answer}'.", False
         )
         return answer
-    
-    def _update_databanks(self):
-        async def _update_game_data_file(self):
-            tree = ET.parse("E:/unp4k-suite-v3.13.21/Data/Game.xml")
-            root = tree.getroot()
-
-            # Search for information
-            objects = []
-
-            for element in root.findall(""):
-                objects.append(element)
-
-            # Convert list to JSON
-            json_data = json.dumps({"elements": objects}, indent=4)
-            return json_data
-        
-        asyncio.create_task(_update_game_data_file(self))
-        return "Updating databanks"
 
     def _access_databanks(self, search_term: str, category: str, attribute: str):
         async def _access_game_data_file(self, search_term: str, category: str, attribute: str):
@@ -605,7 +591,7 @@ class OpenAiWingman(Wingman):
             return json_data
         
         asyncio.create_task(_access_game_data_file(self, search_term, category, attribute))
-        return f"Accessing databanks to find data on {search_term}"
+        return f"Accessing databanks to find data on {search_term}. Please wait."
 
     def _get_current_time(self):
         # Get the current UTC time
@@ -617,38 +603,35 @@ class OpenAiWingman(Wingman):
     def _wait_for_then(self, wait_time: int, action: str):
         if self.wait_task:
             self.wait_task.cancel()
-        self.wait_task = asyncio.create_task(self._wait_then_do_task(wait_time, action))
+        wait_thread = threading.Thread(target=self._wait_then_do_task(wait_time, action))
+        wait_thread.start()
         return "Respond with a message that acknowledges the wait_time and action"
 
-    async def _wait_then_do_task(self, wait_time: int, action: str):
-        try:           
-            async def task(wait_time,action):
+    def _wait_then_do_task(self, wait_time: int, action: str):
+        async def _task(wait_time: int, action: str):
+            try:            
                 time.sleep(wait_time)
                 response, instant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
                 Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
                 await self._play_to_user(response)
-            
-            wait_thread = threading.Thread(target=task, args=(wait_time,action))
-            wait_thread.start()
-        except Exception as e:
-            Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)        
-
-        return "Waiting"
+            except Exception as e:
+                Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)
+        self.wait_task = asyncio.create_task(_task(wait_time, action))
 
     loop_task = None
     looping = True
-    def _start_command_loop(self, command_name):
+    def _start_command_loop(self, command_name: str, interval: int = 2):
         command = self._get_command(command_name)
         if self.loop_task:
             self.loop_task.cancel()
         self.looping = True
-        self.loop_task = asyncio.create_task(self._loop(command))
+        self.loop_task = asyncio.create_task(self._loop(command,interval))
         return "Starting command loop"
 
-    async def _loop(self, command):
+    async def _loop(self, command: str, interval: int = 2):
         try:
             while self.looping:
-                time.sleep(2)
+                time.sleep(interval)
                 self._execute_command(command)
         except Exception as e:
             Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)
