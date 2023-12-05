@@ -172,7 +172,7 @@ configs/contexts/*.yaml
 audio_output
 gui.yaml
 config.yaml
-apikeys.yaml
+mpv.com
 api_keys.yaml
 
 configs/system/secrets.yaml

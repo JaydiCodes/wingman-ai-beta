@@ -1,6 +1,11 @@
+import asyncio
+import threading
+import time
 import json
-from elevenlabs import generate, stream, Voice, VoiceSettings, voices
+from datetime import datetime, timezone
+from elevenlabs import generate, save, Voice, VoiceSettings, voices
 from exceptions import MissingApiKeyException
+from services.audio_player import PedalBoards
 from services.open_ai import OpenAi
 from services.edge import EdgeTTS
 from services.printr import Printr
@@ -16,15 +21,18 @@ class OpenAiWingman(Wingman):
     It transcribes speech to text using Whisper, uses the Completion API for conversation and implements the Tools API to execute functions.
     """
 
-    def __init__(self, name: str, config: dict[str, any], secret_keeper: SecretKeeper):
-        super().__init__(name, config, secret_keeper)
+    _specific_memories: dict[str,str] = {"":""}
+
+    def __init__(self, name: str, config: dict[str, any]):
+        super().__init__(name, config)
 
         self.openai: OpenAi = None  # validate will set this
         """Our OpenAI API wrapper"""
 
         # every conversation starts with the "context" that the user has configured
         self.messages = [
-            {"role": "system", "content": self.config["openai"].get("context")}
+            {"role": "system", "content": self.config["openai"].get("context")},
+            {"role": "system", "content": "{{ {0} }}".format(self._specific_memories)}
         ]
         """The conversation history that is used for the GPT calls"""
 
@@ -158,7 +166,7 @@ class OpenAiWingman(Wingman):
 
         # Calculate the max number of messages to keep including the initial system message
         # `remember_messages * 2` pairs plus one system message.
-        max_messages = (remember_messages * 2) + 1
+        max_messages = (remember_messages * 2) + 2
 
         # every "AI interaction" is a pair of 2 messages: "user" and "assistant" or "tools"
         deleted_pairs = 0
@@ -320,6 +328,31 @@ class OpenAiWingman(Wingman):
                 instant_reponse = self._select_command_response(command)
                 await self._play_to_user(instant_reponse)
 
+        if function_name == "remember_specific":
+            function_response = self._remember_specific(function_args["name"],function_args["value"])
+
+        if function_name == "access_databanks":
+            function_response = self._access_databanks(
+                function_args["query_string"],
+                function_args["category"],
+                function_args["attributes"],
+            )
+
+        if function_name == "get_current_time":
+            function_response = self._get_current_time()
+
+        if function_name == "wait_for_then":
+            function_response = self._wait_for_then(
+                function_args["wait_time"],
+                function_args["action"],
+            )
+
+        if function_name == "start_command_loop":
+            function_response = self._start_command_loop(function_args["command_name"])
+
+        if function_name == "stop_command_loop":
+            function_response = self._stop_command_loop()
+
         return function_response, instant_reponse
 
     async def _play_to_user(self, text: str):
@@ -345,8 +378,11 @@ class OpenAiWingman(Wingman):
                 text, filename="audio_output/edge_tts.mp3", voice=tts_voice
             )
 
-            if self.config.get("features", {}).get("enable_robot_sound_effect"):
-                self.audio_player.effect_audio("audio_output/edge_tts.mp3")
+            if(self.config.get("features", {}).get("enable_robot_sound_effect")):
+                self.audio_player.effect_audio("audio_output/edge_tts.mp3", PedalBoards.ROBOT)
+
+            if(self.config.get("features", {}).get("enable_radio_sound_effect")):
+                self.audio_player.effect_audio("audio_output/edge_tts.mp3", PedalBoards.RADIO)
 
             self.audio_player.play("audio_output/edge_tts.mp3")
         elif self.tts_provider == "elevenlabs":
@@ -365,11 +401,20 @@ class OpenAiWingman(Wingman):
                 text,
                 voice=voice,
                 model=elevenlabs_config.get("model"),
-                stream=True,
+                stream=False,
                 api_key=self.elevenlabs_api_key,
                 latency=elevenlabs_config.get("latency", 3),
             )
-            stream(response)
+            save(response,"audio_output/elevenlabs.mp3")
+
+            if(self.config.get("features", {}).get("enable_robot_sound_effect")):
+                self.audio_player.effect_audio("audio_output/elevenlabs.mp3", PedalBoards.ROBOT)
+
+            if(self.config.get("features", {}).get("enable_radio_sound_effect")):
+                self.audio_player.effect_audio("audio_output/elevenlabs.mp3", PedalBoards.RADIO)
+
+            self.audio_player.play("audio_output/elevenlabs.mp3")
+            
         else:  # OpenAI TTS
             response = self.openai.speak(text, self.config["openai"].get("tts_voice"))
             if response is not None:
@@ -437,6 +482,119 @@ class OpenAiWingman(Wingman):
                     },
                 },
             },
+            {
+                "type": "function",
+                "function": {
+                    "name": "access_databanks",
+                    "description": "A function used only when asked to access the databanks, to search for content related to a search query",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query_string": {
+                                "type": "string",
+                                "description": "The subject of the query that was asked",
+                            },
+                            "category": {
+                                "type": "string",
+                                "description": "The category the subject falls under. i.e: ships, weapons, components",
+                            },
+                            "attributes": {
+                                "type": "string",
+                                "description": "The attributes relating to the subject; comma delimited",
+                            },
+                        },
+                        "required": ["query_string","category","attributes"],
+                    },
+                },
+            },            
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_time",
+                    "description": "An internal function that gets the current time if so needed",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "remember_specific",
+                    "description": "A function that is called when a small specific detail needs to be remembered. This should be called when you assume details are important.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type":"string",
+                                "description": "The name of the memory or 'key' to index it by. i.e 'user_favorite_color'"
+                            },
+                            "value": {
+                                "type":"string",
+                                "description": "The value to remember respective to its key. i.e 'Blue'"
+                            },
+                        },
+                        "required": ["name", "value"]
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "wait_for_then",
+                    "description": "Waits for specified amount of time and then does something. This is also used when asked to set a reminder.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "wait_time": {
+                                "type":"integer",
+                                "description": "The amount of time to wait in seconds. If minutes or hours are given, convert it."
+                            },
+                            "action": {
+                                "type":"string",
+                                "description": "The order to do i.e 'Do this action'"
+                            },
+                        },
+                        "required": ["wait_time", "action"]
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "start_command_loop",
+                    "description": "A function that executes a given command in a loop",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command_name": {
+                                "type": "string",
+                                "description": "The command to execute",
+                                "enum": commands,
+                            },
+                            "interval": {
+                                "type": "number",
+                                "description": "The interval in between executions. If none is given, the default will be 2 seconds"
+                            }
+                        },
+                        "required": ["command_name"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "stop_command_loop",
+                    "description": "A function that stops the current command loop",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    },
+                },
+            },
         ]
         return tools
 
@@ -477,3 +635,71 @@ class OpenAiWingman(Wingman):
             f"   ChatGPT says this language maps to locale '{answer}'.", tags="info"
         )
         return answer
+
+    def _access_databanks(self, search_term: str, category: str, attributes: str):
+        async def _access_game_data_file(self, search_term: str, category: str, attributes: str):
+            json_data = {}
+            # Should load the local json data
+            # Find the category
+            # Find search_term
+            # Find attribute if provided
+            # return json data
+            return json_data
+        
+        asyncio.create_task(_access_game_data_file(self, search_term, category, attributes))
+        return f"Accessing databanks to find data on {search_term}. Please wait."
+    
+    def _remember_specific(self, name: str, vlaue: str):
+        self._specific_memories[name] = vlaue
+        self.messages[1]["content"] = "{{ {0} }}".format(self._specific_memories)
+        return "Noted"
+
+    def _get_current_time(self):
+        # Get the current UTC time
+        current_utc_time = datetime.now(timezone.utc)
+        current_time = current_utc_time.strftime("%H:%M:%S UTC")
+        return f'current time: {current_time}'
+
+    wait_task = None
+    def _wait_for_then(self, wait_time: int, action: str):
+        if self.wait_task:
+            self.wait_task.cancel()
+        wait_thread = threading.Thread(target=self._wait_then_do_task(wait_time, action))
+        wait_thread.start()
+        return "Respond with a message that acknowledges the wait_time and action"
+
+    def _wait_then_do_task(self, wait_time: int, action: str):
+        async def _task(wait_time: int, action: str):
+            try:            
+                time.sleep(wait_time)
+                response, instant_response = await self._get_response_for_transcript(action, self.last_transcript_locale)
+                Printr.clr_print(f"<< ({self.name}): {response}", Printr.GREEN)
+                await self._play_to_user(response)
+            except Exception as e:
+                Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)
+        self.wait_task = asyncio.create_task(_task(wait_time, action))
+
+    loop_task = None
+    looping = True
+    def _start_command_loop(self, command_name: str, interval: int = 2):
+        command = self._get_command(command_name)
+        if self.loop_task:
+            self.loop_task.cancel()
+        self.looping = True
+        self.loop_task = asyncio.create_task(self._loop(command,interval))
+        return "Starting command loop"
+
+    async def _loop(self, command: str, interval: int = 2):
+        try:
+            while self.looping:
+                time.sleep(interval)
+                self._execute_command(command)
+        except Exception as e:
+            Printr.clr_print(f"Error occurred: {str(e)}", Printr.RED)
+
+    def _stop_command_loop(self):
+        if self.loop_task:
+            self.looping = False
+            self.loop_task.cancel()
+            return "Stopping command loop"
+        return "No command to stop"
