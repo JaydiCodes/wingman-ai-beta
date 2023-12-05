@@ -1,26 +1,34 @@
 import io
 import os
-from typing import Iterator
+from os import path
+from enum import Enum
 from pydub import AudioSegment
 from pydub.playback import play
 from scipy.io import wavfile
-from pedalboard import Pedalboard, Chorus, PitchShift, Reverb, Delay, Gain
+from pedalboard import Pedalboard, Chorus, PitchShift, Reverb, Delay, Gain, Resample, Compressor, HighpassFilter, LowpassFilter
 import soundfile as sf
 import scipy.signal
-from os import path
 import numpy
 
+class PedalBoards(Enum):
+    ROBOT = Pedalboard([
+        PitchShift(semitones=-1),
+        Delay(delay_seconds=0.01,feedback=0.5,mix=0.2),
+        Chorus(rate_hz=0.5, depth=0.8, mix=0.5, centre_delay_ms=2, feedback=0.3),
+        Reverb(room_size=0.05, dry_level=0.5, wet_level=0.5, freeze_mode=0.5, width=0.3),
+        Gain(gain_db=3)
+    ])
+    RADIO = Pedalboard([
+        HighpassFilter(1000),
+        LowpassFilter(5000),
+        Resample(10000),
+        Gain(gain_db=3),
+        Compressor(threshold_db=-21,ratio=3.5,attack_ms=1,release_ms=50),
+        Delay(delay_seconds=0.1,mix=0.9),
+        Reverb(room_size=0.01, dry_level=0.6, wet_level=0.4, width=0.3)
+    ])
 
 class AudioPlayer:
-    def pedalboard_chain(self):
-        return Pedalboard([
-            PitchShift(semitones=-2),
-            Delay(delay_seconds=0.01,feedback=0.5,mix=0.5),
-            Chorus(rate_hz=0.5, depth=0.8, mix=0.5, centre_delay_ms=2, feedback=0.3),
-            Reverb(room_size=0.05, dry_level=0.5, wet_level=0.2, freeze_mode=0.5, width=0.5),
-            Gain(gain_db=3)
-        ])
-
     def stream(self, stream: bytes):
         audio = self.get_audio_from_stream(stream)
         play(audio)
@@ -48,17 +56,16 @@ class AudioPlayer:
             )
 
         if robot_effect:
-            self.effect_audio("audio_output/output_generated.wav")
+            self.effect_audio("audio_output/output_generated.wav", PedalBoards.ROBOT)
             audio = AudioSegment.from_wav("audio_output/output_generated.wav")
 
         play(audio)
 
-    def effect_audio(self, audio_file_path):
+    def effect_audio(self, audio_file_path, board: PedalBoards):
         # Load the audio file
-        audio, sample_rate = sf.read(audio_file_path)        
-        board = self.pedalboard_chain()
+        audio, sample_rate = sf.read(audio_file_path)
         # Process the audio with the effects
-        processed_audio = board(audio, sample_rate)
+        processed_audio = board.value(audio, sample_rate)
         # Save the processed audio to a new file
         sf.write(audio_file_path, processed_audio, sample_rate)
 

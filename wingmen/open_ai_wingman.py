@@ -1,12 +1,11 @@
 import asyncio
-import json
 import threading
 import time
-import xml.etree.ElementTree as ET
 import json
 from datetime import datetime, timezone
-from elevenlabs import generate, stream, save, Voice, VoiceSettings, voices
+from elevenlabs import generate, save, Voice, VoiceSettings, voices
 from exceptions import MissingApiKeyException
+from services.audio_player import PedalBoards
 from services.open_ai import OpenAi
 from services.edge import EdgeTTS
 from services.printr import Printr
@@ -18,6 +17,8 @@ class OpenAiWingman(Wingman):
 
     It transcribes speech to text using Whisper, uses the Completion API for conversation and implements the Tools API to execute functions.
     """
+
+    _specific_memories: dict[str,str] = {"":""}
 
     def __init__(self, name: str, config: dict[str, any]):
         super().__init__(name, config)
@@ -35,7 +36,8 @@ class OpenAiWingman(Wingman):
 
         # every conversation starts with the "context" that the user has configured
         self.messages = [
-            {"role": "system", "content": self.config["openai"].get("context")}
+            {"role": "system", "content": self.config["openai"].get("context")},
+            {"role": "system", "content": "{{ {0} }}".format(self._specific_memories)}
         ]
         """The conversation history that is used for the GPT calls"""
 
@@ -138,7 +140,7 @@ class OpenAiWingman(Wingman):
 
         # Calculate the max number of messages to keep including the initial system message
         # `remember_messages * 2` pairs plus one system message.
-        max_messages = (remember_messages * 2) + 1
+        max_messages = (remember_messages * 2) + 2
 
         # every "AI interaction" is a pair of 2 messages: "user" and "assistant" or "tools"
         deleted_pairs = 0
@@ -299,11 +301,14 @@ class OpenAiWingman(Wingman):
                 instant_reponse = self._select_command_response(command)
                 await self._play_to_user(instant_reponse)
 
+        if function_name == "remember_specific":
+            function_response = self._remember_specific(function_args["name"],function_args["value"])
+
         if function_name == "access_databanks":
             function_response = self._access_databanks(
                 function_args["query_string"],
                 function_args["category"],
-                function_args["attribute"],
+                function_args["attributes"],
             )
 
         if function_name == "get_current_time":
@@ -346,8 +351,11 @@ class OpenAiWingman(Wingman):
                 text, filename="audio_output/edge_tts.mp3", voice=tts_voice
             )
 
-            if self.config.get("features", {}).get("enable_robot_sound_effect"):
-                self.audio_player.effect_audio("audio_output/edge_tts.mp3")
+            if(self.config.get("features", {}).get("enable_robot_sound_effect")):
+                self.audio_player.effect_audio("audio_output/edge_tts.mp3", PedalBoards.ROBOT)
+
+            if(self.config.get("features", {}).get("enable_radio_sound_effect")):
+                self.audio_player.effect_audio("audio_output/edge_tts.mp3", PedalBoards.RADIO)
 
             self.audio_player.play("audio_output/edge_tts.mp3")
         elif self.tts_provider == "elevenlabs":
@@ -361,24 +369,24 @@ class OpenAiWingman(Wingman):
             voice_setting = self._get_elevenlabs_settings(elevenlabs_config)
             if voice_setting:
                 voice.settings = voice_setting
-            
-            robot_effect = self.config.get("features", {}).get("enable_robot_sound_effect")
 
             response = generate(
                 text,
                 voice=voice,
                 model=elevenlabs_config.get("model"),
-                stream=(not robot_effect),
+                stream=False,
                 api_key=elevenlabs_config.get("api_key"),
                 latency=elevenlabs_config.get("latency", 3),
             )
-            
-            if robot_effect:
-                save(response,"audio_output/elevenlabs.mp3")
-                self.audio_player.effect_audio("audio_output/elevenlabs.mp3")
-                self.audio_player.play("audio_output/elevenlabs.mp3")
-            else:
-                stream(response)
+            save(response,"audio_output/elevenlabs.mp3")
+
+            if(self.config.get("features", {}).get("enable_robot_sound_effect")):
+                self.audio_player.effect_audio("audio_output/elevenlabs.mp3", PedalBoards.ROBOT)
+
+            if(self.config.get("features", {}).get("enable_radio_sound_effect")):
+                self.audio_player.effect_audio("audio_output/elevenlabs.mp3", PedalBoards.RADIO)
+
+            self.audio_player.play("audio_output/elevenlabs.mp3")
             
         else:  # OpenAI TTS
             response = self.openai.speak(text, self.config["openai"].get("tts_voice"))
@@ -468,7 +476,7 @@ class OpenAiWingman(Wingman):
                                 "description": "The attributes relating to the subject; comma delimited",
                             },
                         },
-                        "required": ["query_string","attribute"],
+                        "required": ["query_string","category","attributes"],
                     },
                 },
             },            
@@ -481,6 +489,27 @@ class OpenAiWingman(Wingman):
                         "type": "object",
                         "properties": {},
                         "required": []
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "remember_specific",
+                    "description": "A function that is called when a small specific detail needs to be remembered. This should be called when you assume details are important.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type":"string",
+                                "description": "The name of the memory or 'key' to index it by. i.e 'user_favorite_color'"
+                            },
+                            "value": {
+                                "type":"string",
+                                "description": "The value to remember respective to its key. i.e 'Blue'"
+                            },
+                        },
+                        "required": ["name", "value"]
                     },
                 },
             },
@@ -580,8 +609,8 @@ class OpenAiWingman(Wingman):
         )
         return answer
 
-    def _access_databanks(self, search_term: str, category: str, attribute: str):
-        async def _access_game_data_file(self, search_term: str, category: str, attribute: str):
+    def _access_databanks(self, search_term: str, category: str, attributes: str):
+        async def _access_game_data_file(self, search_term: str, category: str, attributes: str):
             json_data = {}
             # Should load the local json data
             # Find the category
@@ -590,8 +619,13 @@ class OpenAiWingman(Wingman):
             # return json data
             return json_data
         
-        asyncio.create_task(_access_game_data_file(self, search_term, category, attribute))
+        asyncio.create_task(_access_game_data_file(self, search_term, category, attributes))
         return f"Accessing databanks to find data on {search_term}. Please wait."
+    
+    def _remember_specific(self, name: str, vlaue: str):
+        self._specific_memories[name] = vlaue
+        self.messages[1]["content"] = "{{ {0} }}".format(self._specific_memories)
+        return "Noted"
 
     def _get_current_time(self):
         # Get the current UTC time
