@@ -5,7 +5,7 @@ from enum import Enum
 from pydub import AudioSegment
 from pydub.playback import play
 from scipy.io import wavfile
-from pedalboard import Pedalboard, Chorus, PitchShift, Reverb, Delay, Gain, Resample, Compressor, HighpassFilter, LowpassFilter
+from pedalboard import Pedalboard, Chorus, PitchShift, Reverb, Delay, Gain, Resample, Compressor, HighpassFilter, LowpassFilter, PeakFilter
 import soundfile as sf
 import scipy.signal
 import numpy
@@ -24,8 +24,24 @@ class PedalBoards(Enum):
         Resample(10000),
         Gain(gain_db=3),
         Compressor(threshold_db=-21,ratio=3.5,attack_ms=1,release_ms=50),
-        Delay(delay_seconds=0.1,mix=0.9),
-        Reverb(room_size=0.01, dry_level=0.6, wet_level=0.4, width=0.3)
+        Gain(gain_db=3)
+    ])
+    INTERIOR_HELMET = Pedalboard([
+        PeakFilter(1000,6,2),
+        Delay(delay_seconds=0.01,mix=0.02),
+        Reverb(room_size=0.01, damping=0.9, dry_level=0.8, wet_level=0.2, freeze_mode=1, width=0.05),
+    ])
+    INTERIOR_SMALL = Pedalboard([
+        Delay(delay_seconds=0.03,mix=0.05),
+        Reverb(room_size=0.03, damping=0.7, dry_level=0.7, wet_level=0.3, width=0.1)
+    ])
+    INTERIOR_MEDIUM = Pedalboard([
+        Delay(delay_seconds=0.09,mix=0.07),
+        Reverb(room_size=0.05, damping=0.6, dry_level=0.6, wet_level=0.4, width=0.2)
+    ])
+    INTERIOR_LARGE = Pedalboard([
+        Delay(delay_seconds=0.2,mix=0.1),
+        Reverb(room_size=0.2, dry_level=0.5, wet_level=0.5, width=0.5)
     ])
 
 class AudioPlayer:
@@ -58,18 +74,19 @@ class AudioPlayer:
             audio.export(audio_path, format="wav")
 
         if robot_effect:
-            self.effect_audio(audio_path, PedalBoards.ROBOT)
+            self.effect_audio(audio_path, [PedalBoards.ROBOT, PedalBoards.INTERIOR_SMALL])
             audio = AudioSegment.from_wav(audio_path)
 
         play(audio)
 
-    def effect_audio(self, audio_file_path, board: PedalBoards):
+    def effect_audio(self, audio_file_path, boards: list[PedalBoards]):
         # Load the audio file
         audio, sample_rate = sf.read(audio_file_path)
         # Process the audio with the effects
-        processed_audio = board.value(audio, sample_rate)
+        for board in boards:
+            audio = board.value(audio, sample_rate)
         # Save the processed audio to a new file
-        sf.write(audio_file_path, processed_audio, sample_rate)
+        sf.write(audio_file_path, audio, sample_rate)
 
     def get_audio_from_stream(self, stream: bytes) -> AudioSegment:
         byte_stream = io.BytesIO(stream)
