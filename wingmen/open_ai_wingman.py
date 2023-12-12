@@ -337,16 +337,33 @@ class OpenAiWingman(Wingman):
                 instant_reponse = self._select_command_response(command)
                 await self._play_to_user(instant_reponse)
 
-        if function_name == "log_memory":
-            function_response = self._log_memory(
-                function_args["name"], function_args["value"]
-            )
-
         if function_name == "search_online":
             function_response = self._search_online(
                 function_args["query_string"],
                 function_args["category"],
                 function_args["attributes"],
+            )
+
+        if function_name == "log_memory":
+            function_response = self._log_memory(
+                function_args["name"], function_args["value"]
+            )
+
+        if function_name == "create_complex_object":
+            function_response = self._create_complex_memory(
+                function_args["name"],
+                function_args["file_name"],
+            )
+
+        if function_name == "get_complex_object":
+            obj = self._get_complex_memory(function_args["file_name"])
+            function_response = f"{obj}"
+
+        if function_name == "modify_complex_object":
+            function_response = self._modify_complex_memory(
+                function_args["file_name"],
+                function_args["key"],
+                function_args["value"],
             )
 
         if function_name == "get_current_time":
@@ -545,6 +562,69 @@ class OpenAiWingman(Wingman):
             {
                 "type": "function",
                 "function": {
+                    "name": "create_complex_object",
+                    "description": "A function that creates a complex object to be saved to memory.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "The name of the memory or 'key' to index it by.",
+                            },
+                            "file_name": {
+                                "type": "string",
+                                "description": "The name of the file.",
+                            },
+                        },
+                        "required": ["name", "file_name"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_complex_object",
+                    "description": "A function that gets a complex object of which we have an index for in the current memory.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {
+                                "type": "string",
+                                "description": "The name of the file.",
+                            },
+                        },
+                        "required": ["file_name"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "modify_complex_object",
+                    "description": "A function that modifies an existing complex object of which we have an index for in the current memory.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_name": {
+                                "type": "string",
+                                "description": "The name of the file.",
+                            },
+                            "key": {
+                                "type": "string",
+                                "description": "The name of the property to index it by. i.e 'object_property'",
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "The value of the property. i.e 'this is a value'",
+                            },
+                        },
+                        "required": ["file_name", "key", "value"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "log_memory",
                     "description": "A function that is called when a small specific detail needs to be written to memory. This should be called when you assume details are important.",
                     "parameters": {
@@ -681,6 +761,37 @@ class OpenAiWingman(Wingman):
         self.messages[1]["content"] = "{{ {0} }}".format(self._logged_memories)
         self._save_logged_memories()
         return "Noted"
+
+    def _create_complex_memory(self, file_name: str, name: str):
+        obj = {}
+        self._save_complex_memory(file_name, obj)
+        self._log_memory(name, file_name)
+        return "Empty complex object created. No data logged. Must now specify properties to start modifying."
+
+    def _save_complex_memory(self, file_name: str, obj: any):
+        file_path = f"wingmen/{self.name}/{file_name}.json"
+        if not os.path.exists(f"wingmen/{self.name}"):
+            # If not, create it
+            os.makedirs(f"wingmen/{self.name}")
+        with open(file_path, "w") as file:
+            json.dump(obj, file, indent=4)
+
+    def _modify_complex_memory(self, file_name: str, key: str, value: str):
+        memory = self._get_complex_memory(file_name)
+        memory[key] = value
+        self._save_complex_memory(file_name, memory)
+        return f"Modified {key} to {value}"
+
+    def _get_complex_memory(self, file_name: str):
+        # File path where your JSON data is stored
+        file_path = f"wingmen/{self.name}/{file_name}"
+        if not file_path.endswith(".json") :
+           file_path = f"{file_path}.json"
+        # Reading the JSON file back into a list of dictionaries
+        if os.path.exists(file_path):
+            with open(file_path, "r") as file:
+                return json.load(file)
+        return "No such memory"
 
     def _remove_log_memory(self, name: str):
         self._logged_memories = [d for d in self._logged_memories if d[0] != name]
