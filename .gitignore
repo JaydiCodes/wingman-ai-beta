@@ -177,4 +177,5 @@ api_keys.yaml
 
 configs/system/secrets.yaml
 apikeys.yaml
-wingmen/computer_logged_memories.json
+wingmen/*/*.json
+wingmen/*.json

@@ -353,6 +353,7 @@ class OpenAiWingman(Wingman):
             function_response = self._create_complex_memory(
                 function_args["name"],
                 function_args["file_name"],
+                function_args["content"]
             )
 
         if function_name == "get_complex_object":
@@ -575,8 +576,12 @@ class OpenAiWingman(Wingman):
                                 "type": "string",
                                 "description": "The name of the file.",
                             },
+                            "content":{
+                                "type": "string",
+                                "description": "The initial serialzied data, in json format, that should be stored if any was provided"
+                            }
                         },
-                        "required": ["name", "file_name"],
+                        "required": ["name", "file_name", "content"],
                     },
                 },
             },
@@ -615,7 +620,7 @@ class OpenAiWingman(Wingman):
                             },
                             "value": {
                                 "type": "string",
-                                "description": "The value of the property. i.e 'this is a value'",
+                                "description": "The value of the property. this can be a single string, an array or a complex object (in serialized json format) depending on the value that is needed to be stored.",
                             },
                         },
                         "required": ["file_name", "key", "value"],
@@ -626,7 +631,7 @@ class OpenAiWingman(Wingman):
                 "type": "function",
                 "function": {
                     "name": "log_memory",
-                    "description": "A function that is called when a small specific detail needs to be written to memory. This should be called when you assume details are important.",
+                    "description": "A function that is called when a specific detail needs to be written to memory. This should be called when you assume details are important.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -683,10 +688,10 @@ class OpenAiWingman(Wingman):
                             },
                             "amount": {
                                 "type": "number",
-                                "description": "The amount of times to loop the command.",
+                                "description": "The amount of times to loop the command. -1 for infinity",
                             },
                         },
-                        "required": ["command_name"],
+                        "required": ["command_name", "interval", "amount"],
                     },
                 },
             },
@@ -762,8 +767,10 @@ class OpenAiWingman(Wingman):
         self._save_logged_memories()
         return "Noted"
 
-    def _create_complex_memory(self, file_name: str, name: str):
+    def _create_complex_memory(self, file_name: str, name: str, content: str = None):
         obj = {}
+        if content:
+            obj = json.loads(content)
         self._save_complex_memory(file_name, obj)
         self._log_memory(name, file_name)
         return "Empty complex object created. No data logged. Must now specify properties to start modifying."
@@ -778,7 +785,8 @@ class OpenAiWingman(Wingman):
 
     def _modify_complex_memory(self, file_name: str, key: str, value: str):
         memory = self._get_complex_memory(file_name)
-        memory[key] = value
+        obj = json.loads(value)
+        memory[key] = obj
         self._save_complex_memory(file_name, memory)
         return f"Modified {key} to {value}"
 
